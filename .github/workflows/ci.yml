@@ -18,8 +18,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: pip install -e ".[dev]"
       - run: pytest -q
-      - name: Example gate
+      - name: Example gates
         run: |
-          witnessforge generate examples/claims/claim.cpy examples/claims/mapping.yaml -o out --min-score 1.0
-          witnessforge verify examples/claims/claim.cpy examples/claims/mapping.yaml \
-            --input out/witnesses.dat --actual out/expected.jsonl
+          for ex in claims/claim eligibility/member; do
+            dir=examples/${ex%/*}
+            witnessforge generate $dir/${ex#*/}.cpy $dir/mapping.yaml -o out/${ex%/*} --min-score 1.0
+            witnessforge verify $dir/${ex#*/}.cpy $dir/mapping.yaml --input out/${ex%/*}/witnesses.dat \
+              --actual out/${ex%/*}/expected.jsonl --rejects out/${ex%/*}/expected_rejects.jsonl
+          done

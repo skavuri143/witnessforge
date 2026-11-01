@@ -24,6 +24,14 @@ def run_pipeline(data: bytes, layout: Layout, mapping: Mapping) -> Dict[str, Any
         return {ERROR_KEY: type(exc).__name__}
 
 
+def map_record(record: Dict[str, Any], layout: Layout, mapping: Mapping) -> Dict[str, Any]:
+    """Apply the mapping to an already decoded record, with the same error handling."""
+    try:
+        return apply_mapping(record, mapping, layout)
+    except Exception as exc:  # noqa: BLE001
+        return {ERROR_KEY: type(exc).__name__}
+
+
 def is_error(doc: Dict[str, Any]) -> bool:
     return ERROR_KEY in doc
 

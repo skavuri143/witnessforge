@@ -57,3 +57,13 @@ def test_invalid_bytes_are_rejected():
         decode_item(Field("N", "9", 2), b"\x40\x40")
     with pytest.raises(CodecError):
         decode_item(Field("P", "P", 3), bytes.fromhex("12AB"))
+
+
+def test_binary_big_endian_and_byte_order():
+    field = Field("B", "B", 4, signed=True)
+    assert encode_item(field, -2).hex().upper() == "FFFE"
+    assert decode_item(field, bytes.fromhex("0102")) == Decimal(258)
+    little = Field("B", "B", 4, signed=True, little_endian=True)
+    assert decode_item(little, bytes.fromhex("0102")) == Decimal(513)
+    cents = Field("C", "B", 7, scale=2, signed=True)
+    assert decode_item(cents, encode_item(cents, Decimal("-1234.56"))) == Decimal("-1234.56")

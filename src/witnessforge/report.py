@@ -6,7 +6,17 @@ from collections import defaultdict
 from typing import Any, Dict, List
 
 from . import __version__
+from .mapping import Rule
+from .mutants import FILTER_RULE_ID
 from .witness import ForgeResult
+
+
+def _source_label(rule: Rule) -> str:
+    if rule.items:
+        return " + ".join(sub.source for _, sub in rule.items)
+    if rule.is_constant:
+        return f"constant {rule.value!r}"
+    return " + ".join(rule.sources)
 
 
 def build_report(result: ForgeResult) -> Dict[str, Any]:
@@ -15,15 +25,19 @@ def build_report(result: ForgeResult) -> Dict[str, Any]:
     for mutant in result.mutants:
         by_rule[mutant.rule_id].append(mutant)
 
+    rows = [(r.id, _source_label(r), r.target) for r in result.mapping.rules]
+    if result.mapping.filter is not None:
+        rows.insert(0, (FILTER_RULE_ID, result.mapping.filter.field,
+                        f"(load only {result.mapping.filter.describe()})"))
     rules = []
-    for rule in result.mapping.rules:
-        mutants = by_rule.get(rule.id, [])
+    for rule_id, source, target in rows:
+        mutants = by_rule.get(rule_id, [])
         caught = [m for m in mutants if m.id in killed]
         rules.append(
             {
-                "id": rule.id,
-                "source": rule.source,
-                "target": rule.target,
+                "id": rule_id,
+                "source": source,
+                "target": target,
                 "mutants": len(mutants),
                 "killed": len(caught),
                 "score": round(len(caught) / len(mutants), 4) if mutants else 1.0,
@@ -48,10 +62,14 @@ def build_report(result: ForgeResult) -> Dict[str, Any]:
             "score": round(result.score, 4),
             "candidate_pool": result.pool_size,
             "witness_records": len(result.witnesses),
+            "loaded": sum(1 for w in result.witnesses if w.outcome == "loaded"),
+            "rejected": sum(1 for w in result.witnesses if w.outcome == "rejected"),
+            "filtered": sum(1 for w in result.witnesses if w.outcome == "filtered"),
         },
         "rules": rules,
         "witnesses": [
-            {"index": i, "kills": sorted(w.kills)} for i, w in enumerate(result.witnesses)
+            {"index": i, "outcome": w.outcome, "kills": sorted(w.kills)}
+            for i, w in enumerate(result.witnesses)
         ],
     }
 
@@ -63,7 +81,8 @@ def to_markdown(report: Dict[str, Any]) -> str:
         "",
         f"**Mutation score: {s['score']:.0%}** ({s['killed']} of {s['mutants']} mapping faults detected)",
         "",
-        f"- Witness records: **{s['witness_records']}** (selected from {s['candidate_pool']} candidates)",
+        f"- Witness records: **{s['witness_records']}** (selected from {s['candidate_pool']} candidates): "
+        f"{s['loaded']} load, {s['rejected']} are rejected, {s['filtered']} are filtered out",
         f"- Record length: {s['record_length']} bytes, {s['fields']} fields, {s['rules']} rules",
         "",
         "| Rule | Source | Target | Faults | Detected | Score |",

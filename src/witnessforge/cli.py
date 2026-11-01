@@ -39,9 +39,14 @@ def cmd_generate(args) -> int:
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
 
-    (out / "witnesses.dat").write_bytes(b"".join(w.data for w in result.witnesses))
-    _write_jsonl(out / "witnesses.jsonl", (w.record for w in result.witnesses))
-    _write_jsonl(out / "expected.jsonl", (w.expected for w in result.witnesses))
+    witnesses = result.witnesses
+    (out / "witnesses.dat").write_bytes(b"".join(w.data for w in witnesses))
+    _write_jsonl(out / "witnesses.jsonl", (w.record for w in witnesses))
+    _write_jsonl(out / "expected.jsonl", (w.expected for w in witnesses if w.outcome == "loaded"))
+    _write_jsonl(out / "expected_rejects.jsonl", (
+        dict(w.expected, record=i) for i, w in enumerate(witnesses) if w.outcome == "rejected"))
+    _write_jsonl(out / "expected_filtered.jsonl", (
+        dict(w.expected, record=i) for i, w in enumerate(witnesses) if w.outcome == "filtered"))
     (out / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     (out / "report.md").write_text(to_markdown(report), encoding="utf-8")
 
@@ -50,6 +55,8 @@ def cmd_generate(args) -> int:
         f"WitnessForge {__version__}: {s['witness_records']} witness records detect "
         f"{s['killed']}/{s['mutants']} mapping faults (score {s['score']:.0%})."
     )
+    print(f"  {s['loaded']} should load, {s['rejected']} should be rejected, "
+          f"{s['filtered']} should be filtered out.")
     for rule in report["rules"]:
         for survivor in rule["survivors"]:
             print(f"  undetected: {survivor['id']} - {survivor['description']}")
@@ -76,16 +83,26 @@ def cmd_verify(args) -> int:
         for line in Path(args.actual).read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    result = verify(layout, mapping, data, actual, key=args.key)
+    rejects = None
+    if args.rejects:
+        rejects = [
+            json.loads(line)
+            for line in Path(args.rejects).read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+    result = verify(layout, mapping, data, actual, key=args.key, actual_rejects=rejects)
     for problem in result.problems:
         print(f"PROBLEM: {problem}")
     for m in result.mismatches:
+        where = f"record {m.record} " if m.record is not None else ""
+        note = f" [{m.detail}]" if m.detail else ""
         print(
-            f"MISMATCH record {m.record} {m.path} (rule {m.rule_id or '?'}): "
-            f"expected {m.expected!r}, got {m.actual!r}"
+            f"MISMATCH {where}{m.path} (rule {m.rule_id or '?'}): "
+            f"expected {m.expected!r}, got {m.actual!r}{note}"
         )
     if result.ok:
-        print(f"PASS: {result.records} records match the mapping specification.")
+        print(f"PASS: {result.records} records checked ({result.loaded} loaded, "
+              f"{result.rejected} rejected, {result.filtered} filtered) and match the specification.")
         return EXIT_OK
     rules = sorted({m.rule_id for m in result.mismatches if m.rule_id})
     print(f"FAIL: {len(result.mismatches)} mismatches; rules involved: {', '.join(rules) or '-'}")
@@ -120,7 +137,10 @@ def build_parser() -> argparse.ArgumentParser:
     common(ver)
     ver.add_argument("--input", required=True, help="witnesses.dat that was fed to the pipeline")
     ver.add_argument("--actual", required=True, help="pipeline output, one JSON document per line")
-    ver.add_argument("--key", help="dotted path used to match documents if order is not kept")
+    ver.add_argument("--key", help="dotted path used to match documents "
+                     "(default: the mapping's key rule; otherwise by position)")
+    ver.add_argument("--rejects", help="the pipeline's reject file, one JSON document per line, "
+                     "each holding the key path")
     ver.set_defaults(func=cmd_verify)
     return parser
 

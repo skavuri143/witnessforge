@@ -2,13 +2,14 @@
 
 Supported:
   * elementary items with PIC X / A / 9, including S (sign) and V (implied decimal)
-  * USAGE DISPLAY (zoned decimal) and COMP-3 / PACKED-DECIMAL
+  * USAGE DISPLAY (zoned decimal), COMP-3 / PACKED-DECIMAL, and binary
+    COMP / COMP-4 / COMP-5 / BINARY (big-endian, up to 18 digits)
   * OCCURS n TIMES on elementary items
   * level-88 condition names (ignored, they occupy no storage)
 
 Not yet supported (raises CopybookError so a layout is never silently misread):
-  REDEFINES, OCCURS on group items, OCCURS DEPENDING ON, binary COMP/COMP-4/COMP-5,
-  floating point COMP-1/COMP-2, and edited pictures.
+  REDEFINES, OCCURS on group items, OCCURS DEPENDING ON, floating point
+  COMP-1/COMP-2, and edited pictures.
 """
 
 from __future__ import annotations
@@ -27,9 +28,8 @@ _ENTRY = re.compile(r"^(\d{1,2})\s+([A-Z0-9][A-Z0-9-]*)(.*)$")
 _PIC = re.compile(r"\bPIC(?:TURE)?\s+(?:IS\s+)?(\S+)")
 _OCCURS = re.compile(r"\bOCCURS\s+(\d+)")
 _PACKED = re.compile(r"\b(?:COMP-3|COMPUTATIONAL-3|PACKED-DECIMAL)\b")
-_UNSUPPORTED_USAGE = re.compile(
-    r"\b(?:COMP|COMP-[1245]|COMPUTATIONAL|COMPUTATIONAL-[1245]|BINARY)\b"
-)
+_FLOAT = re.compile(r"\b(?:COMP-[12]|COMPUTATIONAL-[12])\b")
+_BINARY = re.compile(r"\b(?:COMP|COMP-[45]|COMPUTATIONAL|COMPUTATIONAL-[45]|BINARY)\b")
 
 
 @dataclass(frozen=True)
@@ -37,12 +37,13 @@ class Field:
     """One elementary item of a fixed-length record."""
 
     name: str
-    kind: str  # "X" alphanumeric, "9" zoned decimal, "P" packed decimal (COMP-3)
+    kind: str  # "X" alphanumeric, "9" zoned decimal, "P" packed (COMP-3), "B" binary (COMP)
     int_digits: int  # for "X": the character length
     scale: int = 0
     signed: bool = False
     occurs: int = 1
     offset: int = 0
+    little_endian: bool = False  # only set by the byte-order mutant
 
     @property
     def total_digits(self) -> int:
@@ -55,6 +56,8 @@ class Field:
             return self.int_digits
         if self.kind == "9":
             return self.total_digits
+        if self.kind == "B":
+            return 2 if self.total_digits <= 4 else 4 if self.total_digits <= 9 else 8
         return self.total_digits // 2 + 1
 
     @property
@@ -64,7 +67,7 @@ class Field:
 
     @property
     def is_numeric(self) -> bool:
-        return self.kind in ("9", "P")
+        return self.kind in ("9", "P", "B")
 
     def describe(self) -> str:
         if self.kind == "X":
@@ -75,6 +78,8 @@ class Field:
                 pic += f"V9({self.scale})"
             if self.kind == "P":
                 pic += " COMP-3"
+            elif self.kind == "B":
+                pic += " COMP"
         if self.occurs > 1:
             pic += f" OCCURS {self.occurs}"
         return pic
@@ -121,18 +126,20 @@ def _statements(text: str) -> Iterator[str]:
             yield stmt
 
 
-def _picture(name: str, pic: str, packed: bool) -> Tuple[str, int, int, bool]:
+def _picture(name: str, pic: str, usage: str) -> Tuple[str, int, int, bool]:
     expanded = _REPEAT.sub(lambda m: m.group(1) * int(m.group(2)), pic)
     if expanded and set(expanded) <= {"X", "A"}:
-        if packed:
-            raise CopybookError(f"{name}: COMP-3 is only valid on numeric pictures")
+        if usage != "9":
+            raise CopybookError(f"{name}: COMP usage is only valid on numeric pictures")
         return "X", len(expanded), 0, False
     signed = expanded.startswith("S")
     body = expanded[1:] if signed else expanded
     if not body.replace("V", "") or set(body) - {"9", "V"} or body.count("V") > 1:
         raise CopybookError(f"{name}: unsupported picture clause {pic!r}")
     left, _, right = body.partition("V")
-    return ("P" if packed else "9"), len(left), len(right), signed
+    if usage == "B" and len(left) + len(right) > 18:
+        raise CopybookError(f"{name}: binary fields over 18 digits are not supported")
+    return usage, len(left), len(right), signed
 
 
 def parse_copybook(text: str) -> Layout:
@@ -161,10 +168,15 @@ def parse_copybook(text: str) -> Layout:
             if occurs:
                 raise CopybookError(f"{name}: OCCURS on group items is not supported yet")
             continue  # group item, no storage of its own
-        packed = bool(_PACKED.search(rest))
-        if not packed and _UNSUPPORTED_USAGE.search(rest):
-            raise CopybookError(f"{name}: binary/floating USAGE is not supported yet")
-        kind, int_digits, scale, signed = _picture(name, pic.group(1), packed)
+        if _PACKED.search(rest):
+            usage = "P"
+        elif _FLOAT.search(rest):
+            raise CopybookError(f"{name}: floating point COMP-1/COMP-2 is not supported yet")
+        elif _BINARY.search(rest):
+            usage = "B"
+        else:
+            usage = "9"
+        kind, int_digits, scale, signed = _picture(name, pic.group(1), usage)
         if name == "FILLER":
             fillers += 1
             name = f"FILLER-{fillers}"

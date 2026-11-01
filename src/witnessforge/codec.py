@@ -1,4 +1,4 @@
-"""Encode and decode fixed-length EBCDIC records (DISPLAY text, zoned and packed decimal)."""
+"""Encode and decode fixed-length EBCDIC records (DISPLAY text, zoned, packed and binary)."""
 
 from __future__ import annotations
 
@@ -54,8 +54,15 @@ def encode_item(field: Field, value: Any) -> bytes:
         if field.signed:
             out[-1] = (0xD0 if negative else 0xC0) | int(digits[-1])
         return bytes(out)
+    if field.kind == "B":
+        number = -int(digits) if negative else int(digits)
+        order = "little" if field.little_endian else "big"
+        try:
+            return number.to_bytes(field.item_length, order, signed=field.signed)
+        except OverflowError as exc:
+            raise CodecError(f"{field.name}: {value} does not fit {field.item_length} bytes") from exc
 
-    sign = 0xD if negative else (0xC if field.signed else 0xF)
+    sign =0xD if negative else (0xC if field.signed else 0xF)
     nibbles = [int(d) for d in digits] + [sign]
     if len(nibbles) % 2:
         nibbles.insert(0, 0)
@@ -68,6 +75,11 @@ def decode_item(field: Field, data: bytes) -> Any:
         return data.decode(CODEPAGE)
 
     negative = False
+    if field.kind == "B":
+        order = "little" if field.little_endian else "big"
+        number = int.from_bytes(data, order, signed=field.signed)
+        value = Decimal(number).scaleb(-field.scale).quantize(_quantum(field))
+        return value if number else abs(value)
     if field.kind == "9":
         digits = []
         for index, byte in enumerate(data):

@@ -29,6 +29,13 @@ def test_repeat_and_explicit_pictures():
     assert layout.record_length == 12
 
 
+def test_binary_fields():
+    layout = parse_copybook("01 R.\n 05 A PIC S9(4) COMP.\n 05 B PIC 9(9) BINARY.\n 05 C PIC S9(15)V99 COMP-5.\n")
+    assert [f.kind for f in layout.fields] == ["B", "B", "B"]
+    assert [f.item_length for f in layout.fields] == [2, 4, 8]
+    assert layout.record_length == 14
+
+
 def test_sequence_area_and_comments_are_ignored():
     text = "000100* comment\n000200 01 R.\n000300    05 A PIC X(4).\n"
     assert parse_copybook(text).record_length == 4
@@ -38,7 +45,7 @@ def test_sequence_area_and_comments_are_ignored():
     "line",
     [
         "05 A PIC X(4) REDEFINES B.",
-        "05 A PIC S9(4) COMP.",
+        "05 A PIC S9(4) COMP-1.",
         "05 G OCCURS 2 TIMES.",
         "05 A PIC ZZ9.99.",
     ],
